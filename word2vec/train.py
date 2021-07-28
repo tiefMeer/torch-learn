@@ -41,11 +41,11 @@ class HyperParameter():
     def __init__(self):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.EPOCHS = 5
-        self.BATCH_SIZE = 10
+        self.BATCH_SIZE = 32
         self.LR = 10
         self.embed_dim = 100
-        self.vocab_path = "data/vocab_AA.dat"
-        self.model_path = "data/AA.mo"
+        self.vocab_path = "data/corpus/vocab_AA.dat"
+        self.model_path = "data/corpus/AA.mo"
         self.criterion = torch.nn.CrossEntropyLoss()
     def addVocab(self, vocab):
         self.vocab = vocab
