@@ -1,4 +1,12 @@
-data/
+data/*
 */__pycache__/
 */tags
-*/.*.swp
+*.swp
+*.tar
+*.tar.*
+*.log
+*.log.bak
+*.bak
+*.txt
+*.png
+*.dat

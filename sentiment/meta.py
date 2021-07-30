@@ -10,15 +10,15 @@ from torchtext.vocab import build_vocab_from_iterator
 class GlobalParameters():
     def __init__(self):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.EPOCHS = 5
-        self.BATCH_SIZE = 2
-        self.LR = 5
+        self.EPOCHS = 2
+        self.BATCH_SIZE = 64
+        self.LR = 0.01
         self.embed_dim = 200
         self.hidden_dim = 30
         self.target_size = 3
         self.dataSourceFilePath = "data/sentiment/nCoV_100k_train.labled.utf.csv"
         self.vocab_path = "data/sentiment/vocab.dat"
-        self.model_path = "data/sentiment/model.dat"
+        self.model_path = "data/sentiment/model/model.dat"
         self.criterion = torch.nn.CrossEntropyLoss()
         jieba.load_userdict("data/sentiment/jiebaDict.txt")
     def addVocab(self, vocab):
