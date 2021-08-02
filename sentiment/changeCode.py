@@ -2,9 +2,11 @@
 
 import codecs
 
-fin = codecs.open("nCoV_900k_train.unlabled.csv",'r', "gb18030")
-fout = codecs.open("nCoV_900k_train.unlabled.utf.csv",'w', "utf-8")
+fin = codecs.open("nCov_10k_test.csv",'r', "gb18030")
+fout = codecs.open("nCov_10k_test.utf.csv",'w', "utf-8")
 
+#fin = codecs.open("nCoV_900k_train.unlabled.csv",'r', "gb18030")
+#fout = codecs.open("nCoV_900k_train.unlabled.utf.csv",'w', "utf-8")
 #fin = codecs.open("nCoV_100k_train.labled.csv",'r', "gb18030")
 #fout = codecs.open("nCoV_100k_train.labled.utf.csv",'w', "utf-8")
 
