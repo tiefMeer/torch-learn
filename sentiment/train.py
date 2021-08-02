@@ -1,6 +1,7 @@
 #!/usr/bin/env python 
 
 import os
+import gc
 import pdb
 import glob
 import math
@@ -17,8 +18,6 @@ from torch.nn.utils.rnn import (
 import matplotlib.pyplot as plt
 from count import *
 
-import gc
-import objgraph
 
 def loadModel():
     if os.path.exists(gp.model_path) and \
@@ -75,6 +74,17 @@ def collate_fn(batch):
             torch.tensor(length), 
             torch.tensor(senti).to(gp.device) )
 
+def collate_fn_eval(batch):
+    interim = []
+    for dic in batch:
+        interim.append( [dic["id"], dic["text"], len(dic["text"])] )
+    interim.sort(key=lambda x: x[2], reverse=True)
+    id_n, text, length = list( zip(*interim) )
+    text = pad_sequence(text, batch_first=True)
+    return (text.to(gp.device), 
+            torch.tensor(length),
+            id_n)
+
 def rightPredictionCount(output, target):
     all = len(target)
     #print(all)
@@ -110,14 +120,25 @@ def train(dataloader, model, gp, debug=False):
         output, acc, loss = trainUnit(makeInput(item), makeTarget(item), model, gp)
         print("acc:", acc)
         total_acc += acc
-        total_count += 1 
+        total_count += gp.BATCH_SIZE
         lossList.append(loss)
     avg_accu = total_acc/total_count 
     return avg_accu, lossList
 
-def getDataloader():
-    return DataLoader(labledDataset(), batch_size=gp.BATCH_SIZE, 
-                                       collate_fn=collate_fn)
+def eval(dataloader, model, gp):
+    model.eval()
+    with torch.no_grad():
+        for idx, item in enumerate(dataloader):
+            pred = torch.argmax(model(makeInput(item)), dim=1)
+            for line in zip(item[2], pred):
+                print(line[0], ",", int(line[1]))
+
+def getDataloader(dataset=labledDataset):
+    if dataset == testDataset:
+        return DataLoader(dataset(), batch_size=gp.BATCH_SIZE, 
+                                     collate_fn=collate_fn_eval) 
+    return DataLoader(dataset(), batch_size=gp.BATCH_SIZE, 
+                                 collate_fn=collate_fn)
 
 def updateLR():
     f  = lambda x:math.log(1+x)
@@ -125,8 +146,6 @@ def updateLR():
     gp.LR = f8(gp.LR*5)/5
 
 def run():
-    buildVocab(getDataIter)
-    model= loadModel()
     for epoch in range(1, gp.EPOCHS+1):
         start_time = time.time()
         print('#' * 50)
@@ -142,10 +161,16 @@ def run():
     torch.save(model, gp.model_path)
     #torch.save(model, gp.model_path +"."+ str(time.time_ns()) +".bak")
 
+def predict():
+    dataloader = getDataloader(testDataset)
+    eval(dataloader, model, gp)
 
 if __name__ == "__main__":
     try:
-        run()
+        buildVocab(getDataIter)
+        model= loadModel()
+        #run()
+        predict()
     except Exception as ex:
         print("ERROR:", ex)
-        pdb.set_trace()
+        #pdb.set_trace()

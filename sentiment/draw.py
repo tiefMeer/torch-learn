@@ -10,11 +10,11 @@ def draw():
     count=list(map(lambda x:acc.count(x),range(1, max(acc)+1)))
     plt.cla()
     plt.plot(count)
-    plt.savefig(fig_folder+"count_acc."+str(time.time_ns())+".png")
-    accu=list(map(int, open("accu.dat").read().strip().split()))
+    plt.savefig(fig_folder+str(time.time_ns())+".count_acc.png")
+    accu=list(map(float, open("accu.dat").read().strip().split()))
     plt.cla()
     plt.plot(accu)
-    plt.savefig(fig_folder+"accu."+str(time.time_ns())+".png")
+    plt.savefig(fig_folder+str(time.time_ns())+".accu.png")
 
 
 

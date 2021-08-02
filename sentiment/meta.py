@@ -12,11 +12,12 @@ class GlobalParameters():
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.EPOCHS = 2
         self.BATCH_SIZE = 64
-        self.LR = 0.01
+        self.LR = 0.008
         self.embed_dim = 200
         self.hidden_dim = 30
         self.target_size = 3
         self.dataSourceFilePath = "data/sentiment/nCoV_100k_train.labled.utf.csv"
+        self.testDataSourceFilePath = "data/sentiment/nCov_10k_test.utf.csv"
         self.vocab_path = "data/sentiment/vocab.dat"
         self.model_path = "data/sentiment/model/model.dat"
         self.criterion = torch.nn.CrossEntropyLoss()
