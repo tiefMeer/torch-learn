@@ -10,32 +10,37 @@ from torchtext.vocab import build_vocab_from_iterator
 class GlobalParameters():
     def __init__(self):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model = {}
         self.EPOCHS = 2
-        self.BATCH_SIZE = 64
-        self.LR = 0.01
-        self.embed_dim = 200
+        self.BATCH_SIZE = 4
+        self.defaultLR = 0.01
+        self.embed_dim = 128
         self.hidden_dim = 30
         self.target_size = 3
         self.dataSourceFilePath = "data/"
         self.vocab_path = "data/vocab.dat"
         self.model_path = "data/model/model.dat"
+        self.encode_model_path = "data/model/encode_model.dat"
+        self.decode_model_path = "data/model/decode_model.dat"
         self.criterion = torch.nn.CrossEntropyLoss()
         jieba.load_userdict("data/jiebaDict.txt")
     def addVocab(self, vocab):
         self.vocab = vocab
         self.vocab_size = len(vocab)
-    def modelSetting(self, model_para):
-        self.optimizer = torch.optim.SGD(model_para, lr=self.LR)
-        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, 1.0, gamma=0.1)
+    #下面这些改放到model类里
+    #def modelSetting(self, model_para):
+    #    self.optimizer = torch.optim.SGD(model_para, lr=self.LR)
+    #    self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, 1.0, gamma=0.1)
 
 gp = GlobalParameters()
 
-def buildVocab(getIter):
+def buildVocab(getIter=None):
     if os.path.exists(gp.vocab_path):
         vocab = torch.load(gp.vocab_path)
     else:
         it = getIter()
-        vocab = build_vocab_from_iterator(yield_tokens(it), specials=["<unk>"])
+        vocab = build_vocab_from_iterator(yield_tokens(it),
+                                          specials=["<pad>", "<unk>", "<SOS>", "EOS"])
         vocab.set_default_index(vocab["<unk>"])
         torch.save(vocab, gp.vocab_path)
     gp.addVocab(vocab)

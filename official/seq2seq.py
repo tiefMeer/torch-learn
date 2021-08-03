@@ -123,10 +123,14 @@ class EncoderRNN(nn.Module):
         self.embedding = nn.Embedding(input_size, hidden_size)
         self.gru = nn.GRU(hidden_size, hidden_size)
 
-    def forward(self, input, hidden):
-        embedded = self.embedding(input).view(1, 1, -1)
+    def forward(self, inputs, hidden):
+        embedded = self.embedding(inputs).view(1, 1, -1)
         output = embedded
         output, hidden = self.gru(output, hidden)
+        print("encode embed:",embedded.shape)
+        print("encode output:",output.shape)
+        print("encode hidden:",hidden.shape)
+        input()
         return output, hidden
 
     def initHidden(self):
@@ -167,22 +171,36 @@ class AttnDecoderRNN(nn.Module):
         self.gru = nn.GRU(self.hidden_size, self.hidden_size)
         self.out = nn.Linear(self.hidden_size, self.output_size)
 
-    def forward(self, input, hidden, encoder_outputs):
-        embedded = self.embedding(input).view(1, 1, -1)
+    def forward(self, inputs, hidden, encoder_outputs):
+        print("type a char to start next decode:")
+        input()
+        print("inputs: ", inputs.shape)
+        print("hidden: ", hidden.shape)
+        print("encoder_outputs: ", encoder_outputs.shape)
+        embedded = self.embedding(inputs).view(1, 1, -1)
+        print("embed: ", embedded.shape)
         embedded = self.dropout(embedded)
+        print("embed_drop: ", embedded.shape)
 
         attn_weights = F.softmax(
             self.attn(torch.cat((embedded[0], hidden[0]), 1)), dim=1)
+        print("attn_weights: ", attn_weights.shape)
         attn_applied = torch.bmm(attn_weights.unsqueeze(0),
                                  encoder_outputs.unsqueeze(0))
+        print("attn_applied", attn_applied.shape)
 
         output = torch.cat((embedded[0], attn_applied[0]), 1)
+        print("o1", output.shape)
         output = self.attn_combine(output).unsqueeze(0)
+        print("o2", output.shape)
 
         output = F.relu(output)
+        print("o3", output.shape)
         output, hidden = self.gru(output, hidden)
+        print("o4", output.shape)
 
         output = F.log_softmax(self.out(output[0]), dim=1)
+        print("o5", output.shape)
         return output, hidden, attn_weights
 
     def initHidden(self):
@@ -233,6 +251,9 @@ def train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, deco
             decoder_output, decoder_hidden, decoder_attention = decoder(
                 decoder_input, decoder_hidden, encoder_outputs)
             topv, topi = decoder_output.topk(1)
+            print("decode_output:\n", decoder_output)
+            print("topv: \n", topv, "topi:\n", topi)
+            input()
             decoder_input = topi.squeeze().detach()  # detach from history as input
 
             loss += criterion(decoder_output, target_tensor[di])
@@ -377,7 +398,7 @@ encoder1 = EncoderRNN(input_lang.n_words, hidden_size).to(device)
 attn_decoder1 = AttnDecoderRNN(hidden_size, output_lang.n_words, dropout_p=0.1).to(device)
 
 trainIters(encoder1, attn_decoder1, 75000, print_every=5000)
-
+"""
 output_words, attentions = evaluate(
     encoder1, attn_decoder1, "je suis trop froid .")
 plt.matshow(attentions.numpy())
@@ -389,3 +410,4 @@ evaluateAndShowAttention("c est un jeune directeur plein de talent .")
 
 
 print("total time: ", time.time() - start_time)
+"""
