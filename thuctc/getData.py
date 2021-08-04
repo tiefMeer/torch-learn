@@ -89,19 +89,19 @@ class EncodeModel(nn.Module):
     
 class AttnDecodeModel(nn.Module):
     def __init__(self, **para):
+        super(AttnDecodeModel, self).__init__()
         #para
         self.embed_dim = gp.embed_dim
         self.hidden_dim = gp.hidden_dim
         self.output_size = gp.vocab_size
-        self.max_length = 20
+        self.max_length = gp.max_length
         self.dropout_p = 0.01
-        super(AttnDecodeModel, self).__init__()
         # layers
         self.embedding = nn.Embedding(self.output_size, self.embed_dim)
         self.dropout = nn.Dropout(self.dropout_p)
         self.sm = nn.Softmax(dim=2)
         self.attn = nn.Linear(self.embed_dim + self.hidden_dim, self.max_length)
-        self.attn_combine = nn.Linear(self.hidden_dim * 2, self.hidden_dim)
+        self.attn_combine = nn.Linear(self.embed_dim + self.hidden_dim, self.hidden_dim)
         self.relu = nn.ReLU()
         self.gru = nn.GRU(self.hidden_dim, self.hidden_dim, batch_first=True)
         self.out = nn.Linear(self.hidden_dim, self.output_size)
@@ -116,27 +116,25 @@ class AttnDecodeModel(nn.Module):
         print("inputs:\n", inputs)
         print("prev_words: ", prev_words.shape)
         print("hidden: ", hidden.shape)
-        hidden = hidden.permute(1,0,2)       # 因为有batch_first=True, 此处不应该有这个
         print("new hidden: ", hidden.shape)
         print("encoder_outputs: ", encoder_outputs.shape)
-        embed = self.embedding(prev_words)   # <batch_size x 1 x embed_dim>
-        embed = self.dropout(embed)          # <batch_size x 1 x embed_dim>
+        embed = self.dropout(self.embedding(prev_words)) # <batch_size x 1 x embed_dim>
         print("embed_drop: ", embed.shape)
+        hidden = hidden.permute(1,0,2)       # 为了union
         union = torch.cat((embed, hidden), 2)
+        hidden = hidden.permute(1,0,2)       # 换回来
         print("union: ", union.shape)
         attn_w = self.sm(self.attn(union))
         print("attn_weights: ", attn_w.shape)
         score = torch.bmm(attn_w, encoder_outputs)
         print("score: ", score.shape)
-        output = torch.cat((embed[0], score[0]), 1)
+        output = torch.cat((embed, score), 2)
         print("o1", output.shape)
-        output = self.attn_combine(output).unsqueeze(0)
+        output = self.relu(self.attn_combine(output))
         print("o2", output.shape)
-        output = self.relu(output)
-        print("o3", output.shape)
         output, hidden = self.gru(output, hidden)
         print("o4", output.shape)
-        output = self.out(output[0])
+        output = self.out(output)
         print("o5", output.shape)
         return output, hidden
 
@@ -149,6 +147,20 @@ def makeTarget(item, *args, **kargs):
 def seqLoss():
     loss = 0
     return loss
+
+# 将很长的text的rnn的out挑选出gp.max_length个
+# 使之方便attention对齐
+def selectOut(en_out):
+    print("en_out:", en_out.shape)
+    print(en_out)
+    res = torch.zeros(en_out.size(0), 0, gp.hidden_dim)
+    place = 0
+    step = math.floor(en_out.size(1) / gp.max_length)
+    for i in range(0, gp.max_length):
+        res = torch.cat((res, en_out[:, place,:].unsqueeze(1)), dim=1)
+        place += step
+    print("res: ", res.shape, "\n", res)
+    return res
 
 # inputs: 数字化文本序列包,带长度
 # target: 数字化标题序列包,带长度
@@ -164,6 +176,7 @@ def seq2seqTrainUnit(inputs, target, gp, debug=False):
     #encode_output: <batch_size x vocab_size>
     #encode_hidden: <1 x batch_size x hidden_dim>
     encoder_outputs, encoder_hidden = encoder(inputs)
+    encoder_outputs = selectOut(encoder_outputs)
     
     seq_start = torch.fill_(torch.zeros(gp.BATCH_SIZE, 1), 
                             gp.vocab["<SOS>"]).to(gp.device).int()
@@ -171,7 +184,7 @@ def seq2seqTrainUnit(inputs, target, gp, debug=False):
     for di in range(max(target[1])):
         decoder_output, decoder_hidden = decoder(decoder_inputs)
         topv, topi = decoder_output.topk(1)
-        print("decode_output:", decoder_output.shape, "\n", decoder_outputs)
+        print("decode_output:", decoder_output.shape, "\n", decoder_output)
         print("topv: \n", topv, "topi:\n", topi)
         input()
         decoder_inputs = topi.squeeze().detach()  # detach from history as input
@@ -247,6 +260,17 @@ def run():
     torch.save(model, gp.model_path)
     #torch.save(model, gp.model_path +"."+ str(time.time_ns()) +".bak")
 
+def dataCheck():
+    buildVocab(lambda: getDataIter(fields[0]))
+    dataloader = getDataloader()
+    lengths = torch.tensor([])
+    for idx, item in enumerate(dataloader):
+        lengths = torch.cat((lengths, item[1]), dim=0)
+    print(lengths)
+
+
 
 run()
+
+#dataCheck()
 

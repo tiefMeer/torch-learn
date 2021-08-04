@@ -15,8 +15,9 @@ class GlobalParameters():
         self.BATCH_SIZE = 4
         self.defaultLR = 0.01
         self.embed_dim = 128
-        self.hidden_dim = 30
+        self.hidden_dim = 50
         self.target_size = 3
+        self.max_length = 30
         self.dataSourceFilePath = "data/"
         self.vocab_path = "data/vocab.dat"
         self.model_path = "data/model/model.dat"
