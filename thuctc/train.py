@@ -22,8 +22,8 @@ from torchtext.data.datasets_utils import _RawTextIterableDataset
 
 from meta import * 
 
-#fields = glob.glob("data/*")
-fields= ["data/科技", "data/时政"]
+fields = list(map(lambda s:"data/THUCNews/"+s, os.listdir("data/THUCNews/")))
+#fields= ["data/THUCNews/科技", "data/时政"]
 
 #dig:1d-list-like
 def digital2text(dig):
@@ -265,6 +265,7 @@ def run():
     #torch.save(model, gp.model_path +"."+ str(time.time_ns()) +".bak")
 
 
-run()
+if __name__ == "__main__":
+    run()
 
 
