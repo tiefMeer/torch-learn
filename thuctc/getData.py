@@ -6,6 +6,9 @@ import pdb
 import glob
 import math
 import time
+from functools import reduce
+import matplotlib.pyplot as plt
+
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
@@ -16,11 +19,17 @@ from torch.nn.utils.rnn import (
     pad_packed_sequence
 )
 from torchtext.data.datasets_utils import _RawTextIterableDataset
-import matplotlib.pyplot as plt
+
 from meta import * 
 
 #fields = glob.glob("data/*")
 fields= ["data/科技", "data/时政"]
+
+#dig:1d-list-like
+def digital2text(dig):
+    return reduce(lambda s1,s2: s1+s2, 
+                  map(lambda i:gp.vocab.vocab.lookup_token(i), 
+                      dig))
 
 def getDataIter(field):
     for item in glob.glob(field+"/*"):
@@ -77,7 +86,6 @@ class EncodeModel(nn.Module):
     def initHidden(self):
         return 
     def forward(self, inputs):
-        print(inputs)
         text, length = inputs              # text:<batch_size x seq_len>
         embed = self.embedding(text)       # embed: <batch_size x seq_len x embed_dim> 
         gru_in = pack_padded_sequence(embed, length, batch_first=True) 
@@ -111,31 +119,17 @@ class AttnDecodeModel(nn.Module):
     def initPara(self):
         pass
     def forward(self, inputs):
-        # prev_words: <batch_size>
-        prev_words, hidden, encoder_outputs = inputs
-        print("inputs:\n", inputs)
-        print("prev_words: ", prev_words.shape)
-        print("hidden: ", hidden.shape)
-        print("new hidden: ", hidden.shape)
-        print("encoder_outputs: ", encoder_outputs.shape)
-        embed = self.dropout(self.embedding(prev_words)) # <batch_size x 1 x embed_dim>
-        print("embed_drop: ", embed.shape)
-        hidden = hidden.permute(1,0,2)       # 为了union
-        union = torch.cat((embed, hidden), 2)
-        hidden = hidden.permute(1,0,2)       # 换回来
-        print("union: ", union.shape)
-        attn_w = self.sm(self.attn(union))
-        print("attn_weights: ", attn_w.shape)
-        score = torch.bmm(attn_w, encoder_outputs)
-        print("score: ", score.shape)
-        output = torch.cat((embed, score), 2)
-        print("o1", output.shape)
-        output = self.relu(self.attn_combine(output))
-        print("o2", output.shape)
-        output, hidden = self.gru(output, hidden)
-        print("o4", output.shape)
-        output = self.out(output)
-        print("o5", output.shape)
+        prev_words, hidden, encoder_outputs = inputs    #bx1, 1xbx50, bx30x50
+        embed = self.dropout(self.embedding(prev_words))#bx1x128
+        hidden = hidden.permute(1,0,2)           # 为了union
+        union = torch.cat((embed, hidden), 2)           #bx1x178
+        hidden = hidden.permute(1,0,2)           # 换回来
+        attn_w = self.sm(self.attn(union))              #bx1x30
+        score = torch.bmm(attn_w, encoder_outputs)      #bx1x50
+        output = torch.cat((embed, score), 2)           #bx1x178
+        output = self.relu(self.attn_combine(output))   #bx1x50
+        output, hidden = self.gru(output, hidden)       #bx1x50
+        output = self.out(output)                       #bx1xvocab_size
         return output, hidden
 
 def makeInputs(item, *args, **kargs):
@@ -148,27 +142,28 @@ def seqLoss():
     loss = 0
     return loss
 
+def rightPredictionCount(pred, target):
+    return 0
+
 # 将很长的text的rnn的out挑选出gp.max_length个
 # 使之方便attention对齐
 def selectOut(en_out):
-    print("en_out:", en_out.shape)
-    print(en_out)
     res = torch.zeros(en_out.size(0), 0, gp.hidden_dim)
     place = 0
     step = math.floor(en_out.size(1) / gp.max_length)
     for i in range(0, gp.max_length):
         res = torch.cat((res, en_out[:, place,:].unsqueeze(1)), dim=1)
         place += step
-    print("res: ", res.shape, "\n", res)
     return res
 
 # inputs: 数字化文本序列包,带长度
 # target: 数字化标题序列包,带长度
 # batch_first:False shape:<序列长度 x batch_size>
 def seq2seqTrainUnit(inputs, target, gp, debug=False):
-    print("inputs:\n", inputs)
-    print("target:\n", target)
+    #print("inputs:\n", inputs)
+    #print("target:\n", target)
     loss = 0
+    predict_title = []
     encoder,decoder = gp.model["EncodeModel"], gp.model["AttnDecodeModel"]
     encoder.optimizer.zero_grad()
     decoder.optimizer.zero_grad()
@@ -181,33 +176,42 @@ def seq2seqTrainUnit(inputs, target, gp, debug=False):
     seq_start = torch.fill_(torch.zeros(gp.BATCH_SIZE, 1), 
                             gp.vocab["<SOS>"]).to(gp.device).int()
     decoder_inputs = (seq_start, encoder_hidden, encoder_outputs)
-    for di in range(max(target[1])):
+    for di in range(max(target[1])-1):
         decoder_output, decoder_hidden = decoder(decoder_inputs)
+        #print("de_out: ", decoder_output.shape,"\n", decoder_output.squeeze(1) )
+        #print("target: ", target[0][:,di+1].shape,"\n", target[0][:,di+1])
+        loss += gp.criterion(decoder_output.squeeze(1), 
+                             target[0][:, di+1])          # +1是因为title也被加了SOS
+        decoder_input = target[0][:, di+1].view(gp.BATCH_SIZE, 1)   # Teacher forcing
+        # 以下是 non-Teacher forcing part
         topv, topi = decoder_output.topk(1)
-        print("decode_output:", decoder_output.shape, "\n", decoder_output)
-        print("topv: \n", topv, "topi:\n", topi)
-        input()
-        decoder_inputs = topi.squeeze().detach()  # detach from history as input
-        loss += criterion(decoder_output, target[di])
-        if decoder_inputs.item() == EOS_token:
-            break
+        predict_title.append(topi[0][0])
+        #decoder_inputs = topi.squeeze().detach()  # detach from history as input
+        #loss += criterion(decoder_output, target[di])
+        #if decoder_inputs.item() == EOS_token:
+        #    break
 
-    print("loss: ", loss)
+    print("loss: ", int(loss))
+    print("<<< ", digital2text(target[0][0]))
+    print(">>> ", digital2text(predict_title))
     loss.backward()
     encoder.optimizer.step()
     decoder.optimizer.step()
     #print("output:\n", output)
-    return output, rightPredictionCount(output, target), loss
+    output = None
+    return output, rightPredictionCount(predict_title, target[0][0]), loss
 
 def seq2seqTrain(dataloader, gp):
-    total_acc, total_count = 0, 0
+    total_acc, total_count = 0, 1
     lossList = []
     gp.model["EncodeModel"].train()
     gp.model["AttnDecodeModel"].train()
     for idx, item in enumerate(dataloader):
+        if len(item[0]) != gp.BATCH_SIZE:
+            break
         print("batch num: ", total_count)
         output, acc, loss = seq2seqTrainUnit(makeInputs(item), makeTarget(item), gp)
-        print("acc:", acc)
+        #print("acc:", acc)
         total_acc += acc
         total_count += gp.BATCH_SIZE
         lossList.append(loss)
@@ -250,27 +254,17 @@ def run():
         print('#' * 50)
         dataloader = getDataloader()
         avg_accu, lossList = seq2seqTrain(dataloader, gp)
-        updateLR()
+        #updateLR()
         print('#' * 50)
         print("# epoch: {:3d} | time: {:5.2f}s | avg_accu: {:8.3f} | nextLR: {:8.3f} ".\
-                format(epoch, time.time()-start_time, avg_accu, gp.LR) )
+                format(epoch, time.time()-start_time, avg_accu, gp.defaultLR) )
         #plt.plot(lossList)
         #plt.savefig(gp.fig_path+"lossList-"+str(time.time_ns())+".png")
         gc.collect()
-    torch.save(model, gp.model_path)
+    #torch.save(model, gp.model_path)
     #torch.save(model, gp.model_path +"."+ str(time.time_ns()) +".bak")
-
-def dataCheck():
-    buildVocab(lambda: getDataIter(fields[0]))
-    dataloader = getDataloader()
-    lengths = torch.tensor([])
-    for idx, item in enumerate(dataloader):
-        lengths = torch.cat((lengths, item[1]), dim=0)
-    print(lengths)
-
 
 
 run()
 
-#dataCheck()
 

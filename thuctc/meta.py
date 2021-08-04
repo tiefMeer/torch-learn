@@ -11,8 +11,8 @@ class GlobalParameters():
     def __init__(self):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = {}
-        self.EPOCHS = 2
-        self.BATCH_SIZE = 4
+        self.EPOCHS = 30
+        self.BATCH_SIZE = 2
         self.defaultLR = 0.01
         self.embed_dim = 128
         self.hidden_dim = 50
