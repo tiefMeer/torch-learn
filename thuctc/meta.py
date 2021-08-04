@@ -11,19 +11,20 @@ class GlobalParameters():
     def __init__(self):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = {}
-        self.EPOCHS = 30
-        self.BATCH_SIZE = 2
-        self.defaultLR = 0.01
+        self.EPOCHS = 10
+        self.BATCH_SIZE = 64
+        self.defaultLR = 0.008
         self.embed_dim = 128
         self.hidden_dim = 50
         self.target_size = 3
         self.max_length = 30
         self.dataSourceFilePath = "data/"
         self.vocab_path = "data/vocab.dat"
+        self.fig_path = "data/fig/"
         self.model_path = "data/model/model.dat"
         self.encode_model_path = "data/model/encode_model.dat"
         self.decode_model_path = "data/model/decode_model.dat"
-        self.criterion = torch.nn.CrossEntropyLoss()
+        self.criterion = torch.nn.CrossEntropyLoss(reduction='none')
         jieba.load_userdict("data/jiebaDict.txt")
     def addVocab(self, vocab):
         self.vocab = vocab
@@ -41,7 +42,7 @@ def buildVocab(getIter=None):
     else:
         it = getIter()
         vocab = build_vocab_from_iterator(yield_tokens(it),
-                                          specials=["<pad>", "<unk>", "<SOS>", "EOS"])
+                                          specials=["<pad>", "<unk>", "<SOS>", "<EOS>"])
         vocab.set_default_index(vocab["<unk>"])
         torch.save(vocab, gp.vocab_path)
     gp.addVocab(vocab)

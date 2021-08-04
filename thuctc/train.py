@@ -2,6 +2,7 @@
 
 import os
 import gc
+import sys
 import pdb
 import glob
 import math
@@ -94,7 +95,7 @@ class EncodeModel(nn.Module):
         #output = self.lsm( self.out(takeout(unpack)) )
         output = unpack[0]
         return output, hidden
-    
+
 class AttnDecodeModel(nn.Module):
     def __init__(self, **para):
         super(AttnDecodeModel, self).__init__()
@@ -148,7 +149,7 @@ def rightPredictionCount(pred, target):
 # 将很长的text的rnn的out挑选出gp.max_length个
 # 使之方便attention对齐
 def selectOut(en_out):
-    res = torch.zeros(en_out.size(0), 0, gp.hidden_dim)
+    res = torch.zeros(en_out.size(0), 0, gp.hidden_dim).to(gp.device)
     place = 0
     step = math.floor(en_out.size(1) / gp.max_length)
     for i in range(0, gp.max_length):
@@ -156,12 +157,16 @@ def selectOut(en_out):
         place += step
     return res
 
+def greatorMask(current_n, lengths):
+    mask = current_n < lengths
+    return mask.to(gp.device)
+
 # inputs: 数字化文本序列包,带长度
 # target: 数字化标题序列包,带长度
 # batch_first:False shape:<序列长度 x batch_size>
 def seq2seqTrainUnit(inputs, target, gp, debug=False):
     #print("inputs:\n", inputs)
-    #print("target:\n", target)
+    #print("whole target:\n", target)
     loss = 0
     predict_title = []
     encoder,decoder = gp.model["EncodeModel"], gp.model["AttnDecodeModel"]
@@ -170,22 +175,26 @@ def seq2seqTrainUnit(inputs, target, gp, debug=False):
 
     #encode_output: <batch_size x vocab_size>
     #encode_hidden: <1 x batch_size x hidden_dim>
-    encoder_outputs, encoder_hidden = encoder(inputs)
-    encoder_outputs = selectOut(encoder_outputs)
+    encoder_output, encoder_hidden = encoder(inputs)
+    encoder_output = selectOut(encoder_output)
+    #print("en_out: ", encoder_output)
     
     seq_start = torch.fill_(torch.zeros(gp.BATCH_SIZE, 1), 
                             gp.vocab["<SOS>"]).to(gp.device).int()
-    decoder_inputs = (seq_start, encoder_hidden, encoder_outputs)
-    for di in range(max(target[1])-1):
+    decoder_inputs = [seq_start, encoder_hidden, encoder_output]
+    for di in range(max(target[1])):
         decoder_output, decoder_hidden = decoder(decoder_inputs)
-        #print("de_out: ", decoder_output.shape,"\n", decoder_output.squeeze(1) )
-        #print("target: ", target[0][:,di+1].shape,"\n", target[0][:,di+1])
-        loss += gp.criterion(decoder_output.squeeze(1), 
-                             target[0][:, di+1])          # +1是因为title也被加了SOS
-        decoder_input = target[0][:, di+1].view(gp.BATCH_SIZE, 1)   # Teacher forcing
-        # 以下是 non-Teacher forcing part
         topv, topi = decoder_output.topk(1)
         predict_title.append(topi[0][0])
+        #print("de_out: ", decoder_output.shape,"\n", decoder_output.squeeze(1) )
+        #print("target: ", target[0][:,di].shape,"\n", target[0][:,di])
+        #print("predict: ", topi[0][0], "\tprob: ", decoder_output[0,0,3])
+        loss_tensor = gp.criterion(decoder_output.squeeze(1), 
+                                    target[0][:, di]) 
+        loss += loss_tensor.masked_select(greatorMask(di, target[1])).mean()
+        #print("loss:\n", loss.masked_select(greatorMask(di, target[1])))
+        decoder_inputs[0] = target[0][:, di].view(gp.BATCH_SIZE, 1) # Teacher forcing
+        # 以下是 non-Teacher forcing part
         #decoder_inputs = topi.squeeze().detach()  # detach from history as input
         #loss += criterion(decoder_output, target[di])
         #if decoder_inputs.item() == EOS_token:
@@ -194,11 +203,11 @@ def seq2seqTrainUnit(inputs, target, gp, debug=False):
     print("loss: ", int(loss))
     print("<<< ", digital2text(target[0][0]))
     print(">>> ", digital2text(predict_title))
+    #input()
     loss.backward()
     encoder.optimizer.step()
     decoder.optimizer.step()
-    #print("output:\n", output)
-    output = None
+    output = predict_title
     return output, rightPredictionCount(predict_title, target[0][0]), loss
 
 def seq2seqTrain(dataloader, gp):
@@ -211,6 +220,9 @@ def seq2seqTrain(dataloader, gp):
             break
         print("batch num: ", total_count)
         output, acc, loss = seq2seqTrainUnit(makeInputs(item), makeTarget(item), gp)
+        print(int(total_count), "\t", int(loss), file=sys.stderr)
+        #if idx > 200:
+        #    input()
         #print("acc:", acc)
         total_acc += acc
         total_count += gp.BATCH_SIZE
@@ -223,7 +235,7 @@ def collate_fn(batch):
     for dic in batch:
         text = text_pipeline(dic["text"])
         title = text_pipeline(dic["title"])
-        interim.append( [text, len(text)+1, title, len(title)+1] ) # +1是下面的<SOS>
+        interim.append( [text, len(text)+1, title, len(title)+1] ) # +1是<SOS>或<EOS>
     interim.sort(key=lambda x: x[1], reverse=True)
     text, text_length, title, title_length = list( zip(*interim) )
 
@@ -231,9 +243,12 @@ def collate_fn(batch):
     adding = torch.fill_(torch.zeros(text.size(0), 1), gp.vocab["<SOS>"]).to(gp.device)
     text = torch.cat((adding.int() , text), dim=1)  # fill_()会变float，所以加int()
 
+    adding = torch.tensor([gp.vocab["<EOS>"]]).to(gp.device)
+    title = list(map(lambda i:torch.cat((title[i], adding), dim=0), 
+                     range(len(title))))
     title = pad_sequence(title, batch_first=True)
-    adding = torch.fill_(torch.zeros(title.size(0), 1), gp.vocab["<SOS>"]).to(gp.device)
-    title = torch.cat((adding.int() , title), dim=1)  # fill_()会变float，所以加int()
+    #adding = torch.fill_(torch.zeros(title.size(0), 1), gp.vocab["<EOS>"]).to(gp.device)
+    #title = torch.cat((adding.int() , title), dim=1)  # fill_()会变float，所以加int()
 
     return (text.to(gp.device), torch.tensor(text_length), 
             title.to(gp.device), torch.tensor(title_length)  )
@@ -258,11 +273,16 @@ def run():
         print('#' * 50)
         print("# epoch: {:3d} | time: {:5.2f}s | avg_accu: {:8.3f} | nextLR: {:8.3f} ".\
                 format(epoch, time.time()-start_time, avg_accu, gp.defaultLR) )
-        #plt.plot(lossList)
-        #plt.savefig(gp.fig_path+"lossList-"+str(time.time_ns())+".png")
+        plt.cla()
+        plt.plot(lossList)
+        plt.savefig(gp.fig_path+"lossList-"+str(time.time_ns())+".png")
         gc.collect()
-    #torch.save(model, gp.model_path)
-    #torch.save(model, gp.model_path +"."+ str(time.time_ns()) +".bak")
+        torch.save(gp.model["EncodeModel"], gp.encode_model_path)
+        torch.save(gp.model["EncodeModel"], 
+                   gp.decode_model_path +"."+ str(time.time_ns()) +".bak")
+        torch.save(gp.model["AttnDecodeModel"], gp.encode_model_path)
+        torch.save(gp.model["AttnDecodeModel"], 
+                   gp.decode_model_path +"."+ str(time.time_ns()) +".bak")
 
 
 if __name__ == "__main__":
