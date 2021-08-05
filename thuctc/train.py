@@ -37,7 +37,7 @@ def getDataIter(field):
         res={}
         with open(item) as f:
             res["title"] = f.readline().strip()
-            res["text"]  = f.read().strip()
+            res["text"]  = f.read().strip()[:10000]
         yield res
 
 def dataset(field):
@@ -104,13 +104,16 @@ class AttnDecodeModel(nn.Module):
         self.hidden_dim = gp.hidden_dim
         self.output_size = gp.vocab_size
         self.max_length = gp.max_length
+        self.text_max_length = gp.text_max_length
         self.dropout_p = 0.01
         # layers
         self.embedding = nn.Embedding(self.output_size, self.embed_dim)
         self.dropout = nn.Dropout(self.dropout_p)
         self.sm = nn.Softmax(dim=2)
-        self.attn = nn.Linear(self.embed_dim + self.hidden_dim, self.max_length)
-        self.attn_combine = nn.Linear(self.embed_dim + self.hidden_dim, self.hidden_dim)
+        self.attn = nn.Linear(self.embed_dim + self.hidden_dim,
+                              1+self.text_max_length)
+        self.attn_combine = nn.Linear(self.embed_dim + self.hidden_dim,
+                                      self.hidden_dim)
         self.relu = nn.ReLU()
         self.gru = nn.GRU(self.hidden_dim, self.hidden_dim, batch_first=True)
         self.out = nn.Linear(self.hidden_dim, self.output_size)
@@ -120,12 +123,13 @@ class AttnDecodeModel(nn.Module):
     def initPara(self):
         pass
     def forward(self, inputs):
-        prev_words, hidden, encoder_outputs = inputs    #bx1, 1xbx50, bx30x50
+        prev_words, hidden, encoder_outputs = inputs    #bx1,1xbx50,bx501x50
         embed = self.dropout(self.embedding(prev_words))#bx1x128
         hidden = hidden.permute(1,0,2)           # 为了union
         union = torch.cat((embed, hidden), 2)           #bx1x178
         hidden = hidden.permute(1,0,2)           # 换回来
-        attn_w = self.sm(self.attn(union))              #bx1x30
+        attn_w = self.sm(self.attn(union))              #bx1x501
+        #print(attn_w.shape,"\t", encoder_outputs.shape)
         score = torch.bmm(attn_w, encoder_outputs)      #bx1x50
         output = torch.cat((embed, score), 2)           #bx1x178
         output = self.relu(self.attn_combine(output))   #bx1x50
@@ -176,9 +180,9 @@ def seq2seqTrainUnit(inputs, target, gp, debug=False):
     #encode_output: <batch_size x vocab_size>
     #encode_hidden: <1 x batch_size x hidden_dim>
     encoder_output, encoder_hidden = encoder(inputs)
-    encoder_output = selectOut(encoder_output)
+    #encoder_output = selectOut(encoder_output)
     #print("en_out: ", encoder_output)
-    
+
     seq_start = torch.fill_(torch.zeros(gp.BATCH_SIZE, 1), 
                             gp.vocab["<SOS>"]).to(gp.device).int()
     decoder_inputs = [seq_start, encoder_hidden, encoder_output]
@@ -188,9 +192,11 @@ def seq2seqTrainUnit(inputs, target, gp, debug=False):
         predict_title.append(topi[0][0])
         #print("de_out: ", decoder_output.shape,"\n", decoder_output.squeeze(1) )
         #print("target: ", target[0][:,di].shape,"\n", target[0][:,di])
-        #print("predict: ", topi[0][0], "\tprob: ", decoder_output[0,0,3])
+        #print("predict: ", topi[0][:10], "\tprob: ", decoder_output[0,0,3])
         loss_tensor = gp.criterion(decoder_output.squeeze(1), 
-                                    target[0][:, di]) 
+                                   target[0][:, di]) 
+        #print("loss: ", loss_tensor.data.tolist()[:10])
+        #print("loss mean: ", loss_tensor.masked_select(greatorMask(di, target[1])))
         loss += loss_tensor.masked_select(greatorMask(di, target[1])).mean()
         #print("loss:\n", loss.masked_select(greatorMask(di, target[1])))
         decoder_inputs[0] = target[0][:, di].view(gp.BATCH_SIZE, 1) # Teacher forcing
@@ -203,7 +209,6 @@ def seq2seqTrainUnit(inputs, target, gp, debug=False):
     print("loss: ", int(loss))
     print("<<< ", digital2text(target[0][0]))
     print(">>> ", digital2text(predict_title))
-    #input()
     loss.backward()
     encoder.optimizer.step()
     decoder.optimizer.step()
@@ -234,7 +239,7 @@ def collate_fn(batch):
     interim = []
     for dic in batch:
         text = text_pipeline(dic["text"])
-        title = text_pipeline(dic["title"])
+        title = title_pipeline(dic["title"])
         interim.append( [text, len(text)+1, title, len(title)+1] ) # +1是<SOS>或<EOS>
     interim.sort(key=lambda x: x[1], reverse=True)
     text, text_length, title, title_length = list( zip(*interim) )
@@ -259,30 +264,45 @@ def getDataloader(dataset=dataset):
                       batch_size=gp.BATCH_SIZE, 
                       collate_fn=collate_fn)
 
+def showEpoch(avg_accu, lossList, epoch_n, start_time):
+    gp.epoch_loss_list.append(sum(lossList)/len(lossList))
+    plt.cla()
+    plt.plot(gp.epoch_loss_list)
+    plt.savefig(gp.epoch_loss_list_fig_path)
+    print('#' * 50)
+    print("# epoch: {:3d} | time: {:5.2f}s | avg_accu: {:8.3f} | nextLR: {:8.3f} ".\
+            format(epoch_n, time.time()-start_time, avg_accu, gp.defaultLR) )
+    plt.cla()
+    plt.plot(lossList)
+    plt.savefig(gp.fig_path+"lossList-"+str(time.time_ns())+".png")
+
+def updateHyperParas():
+    gp.BATCH_SIZE = 32 if gp.BATCH_SIZE == 64 else 64
+    # ...
+
+def runEpoch(epoch_n):
+    start_time = time.time()
+    print('#' * 50)
+    dataloader = getDataloader()
+    avg_accu, lossList = seq2seqTrain(dataloader, gp)
+    showEpoch(avg_accu, lossList, epoch_n, start_time)
+    #updateHyperParas()
+    gc.collect()
+    torch.save(gp.model["EncodeModel"], gp.encode_model_path)
+    torch.save(gp.model["AttnDecodeModel"], gp.decode_model_path)
+    if epoch_n%20 == 0:
+        torch.save(gp.model["EncodeModel"], 
+                   gp.encode_model_path +"."+ str(time.time_ns()) +".bak")
+        torch.save(gp.model["AttnDecodeModel"], 
+                   gp.decode_model_path +"."+ str(time.time_ns()) +".bak")
+
 def run():
     buildVocab(lambda: getDataIter(fields[0]))
     loadModel(gp.encode_model_path, name="EncodeModel")
     loadModel(gp.decode_model_path, name="AttnDecodeModel")
 
-    for epoch in range(1, gp.EPOCHS+1):
-        start_time = time.time()
-        print('#' * 50)
-        dataloader = getDataloader()
-        avg_accu, lossList = seq2seqTrain(dataloader, gp)
-        #updateLR()
-        print('#' * 50)
-        print("# epoch: {:3d} | time: {:5.2f}s | avg_accu: {:8.3f} | nextLR: {:8.3f} ".\
-                format(epoch, time.time()-start_time, avg_accu, gp.defaultLR) )
-        plt.cla()
-        plt.plot(lossList)
-        plt.savefig(gp.fig_path+"lossList-"+str(time.time_ns())+".png")
-        gc.collect()
-        torch.save(gp.model["EncodeModel"], gp.encode_model_path)
-        torch.save(gp.model["EncodeModel"], 
-                   gp.decode_model_path +"."+ str(time.time_ns()) +".bak")
-        torch.save(gp.model["AttnDecodeModel"], gp.encode_model_path)
-        torch.save(gp.model["AttnDecodeModel"], 
-                   gp.decode_model_path +"."+ str(time.time_ns()) +".bak")
+    for e in range(1, gp.EPOCHS+1):
+        runEpoch(e)
 
 
 if __name__ == "__main__":
