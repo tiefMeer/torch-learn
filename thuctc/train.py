@@ -14,14 +14,10 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
-from torch.nn.utils.rnn import (
-    pad_sequence,
-    pack_padded_sequence,
-    pad_packed_sequence
-)
+from torch.nn.utils.rnn import pad_sequence
 from torchtext.data.datasets_utils import _RawTextIterableDataset
 
-from meta import * 
+from model import * 
 
 fields = list(map(lambda s:"data/THUCNews/"+s, os.listdir("data/THUCNews/")))
 #fields= ["data/THUCNews/科技", "data/时政"]
@@ -45,22 +41,6 @@ def dataset(field):
     NUM_ITEMS = len(glob.glob(field+"/*.txt")) 
     return _RawTextIterableDataset(NAME, NUM_ITEMS, getDataIter(field))
 
-def loadModel(model_path=gp.model_path, name="Model"):
-    if os.path.exists(model_path) and \
-       os.path.getsize(model_path) != 0:
-        gp.model[name] = torch.load(model_path)
-    else:
-        #last_model = max(glob.glob(model_path+".*"))
-        last_model = ""     # 用于取最后一个模型备份．暂时不用
-        if os.path.exists(last_model) and \
-           os.path.getsize(last_model) != 0:
-            gp.model[name] = torch.load(last_model)
-        else:
-            Model = eval(name)
-            gp.model[name] = Model().to(gp.device)  # 不存在现有模型，新建一个
-    #gp.modelSetting(gp.model[name].parameters())
-    return gp.model[name]
-
 def compression(unpack, layer):
     return res
 
@@ -71,84 +51,18 @@ def takeout(unpack):
         res[n] = unpack[0][n][length-1]
     return res.to(gp.device)
 
-class EncodeModel(nn.Module):
-    def __init__(self):
-        super(EncodeModel, self).__init__()
-        # layers
-        self.embedding = nn.Embedding(gp.vocab_size, gp.embed_dim)
-        self.gru = nn.GRU(gp.embed_dim, gp.hidden_dim, batch_first=True)
-        self.out = nn.Linear(gp.hidden_dim, gp.vocab_size)
-        self.lsm = nn.LogSoftmax(dim=1)
-        # optim
-        self.LR = gp.defaultLR
-        self.optimizer = torch.optim.SGD(self.parameters(), lr=self.LR)
-    def initPara(self):
-        pass
-    def initHidden(self):
-        return 
-    def forward(self, inputs):
-        text, length = inputs              # text:<batch_size x seq_len>
-        embed = self.embedding(text)       # embed: <batch_size x seq_len x embed_dim> 
-        gru_in = pack_padded_sequence(embed, length, batch_first=True) 
-        gru_out, hidden = self.gru(gru_in)
-        unpack = pad_packed_sequence(gru_out, batch_first=True)
-        #output = self.lsm( self.out(takeout(unpack)) )
-        output = unpack[0]
-        return output, hidden
-
-class AttnDecodeModel(nn.Module):
-    def __init__(self, **para):
-        super(AttnDecodeModel, self).__init__()
-        #para
-        self.embed_dim = gp.embed_dim
-        self.hidden_dim = gp.hidden_dim
-        self.output_size = gp.vocab_size
-        self.max_length = gp.max_length
-        self.text_max_length = gp.text_max_length
-        self.dropout_p = 0.01
-        # layers
-        self.embedding = nn.Embedding(self.output_size, self.embed_dim)
-        self.dropout = nn.Dropout(self.dropout_p)
-        self.sm = nn.Softmax(dim=2)
-        self.attn = nn.Linear(self.embed_dim + self.hidden_dim,
-                              1+self.text_max_length)
-        self.attn_combine = nn.Linear(self.embed_dim + self.hidden_dim,
-                                      self.hidden_dim)
-        self.relu = nn.ReLU()
-        self.gru = nn.GRU(self.hidden_dim, self.hidden_dim, batch_first=True)
-        self.out = nn.Linear(self.hidden_dim, self.output_size)
-        # optim
-        self.LR = gp.defaultLR
-        self.optimizer = torch.optim.SGD(self.parameters(), lr=self.LR)
-    def initPara(self):
-        pass
-    def forward(self, inputs):
-        prev_words, hidden, encoder_outputs = inputs    #bx1,1xbx50,bx501x50
-        embed = self.dropout(self.embedding(prev_words))#bx1x128
-        hidden = hidden.permute(1,0,2)           # 为了union
-        union = torch.cat((embed, hidden), 2)           #bx1x178
-        hidden = hidden.permute(1,0,2)           # 换回来
-        attn_w = self.sm(self.attn(union))              #bx1x501
-        #print(attn_w.shape,"\t", encoder_outputs.shape)
-        score = torch.bmm(attn_w, encoder_outputs)      #bx1x50
-        output = torch.cat((embed, score), 2)           #bx1x178
-        output = self.relu(self.attn_combine(output))   #bx1x50
-        output, hidden = self.gru(output, hidden)       #bx1x50
-        output = self.out(output)                       #bx1xvocab_size
-        return output, hidden
-
 def makeInputs(item, *args, **kargs):
-    return item[0], item[1]
+    return [item[0], item[1]]
 
 def makeTarget(item, *args, **kargs):
-    return item[2], item[3] 
+    return [item[2], item[3]]
 
 def seqLoss():
     loss = 0
     return loss
 
 def rightPredictionCount(pred, target):
-    return 0
+    return pred.numel()-(pred-target).count_nonzero()
 
 # 将很长的text的rnn的out挑选出gp.max_length个
 # 使之方便attention对齐
@@ -161,71 +75,31 @@ def selectOut(en_out):
         place += step
     return res
 
-def greatorMask(current_n, lengths):
-    mask = current_n < lengths
-    return mask.to(gp.device)
-
 # inputs: 数字化文本序列包,带长度
 # target: 数字化标题序列包,带长度
 # batch_first:False shape:<序列长度 x batch_size>
 def seq2seqTrainUnit(inputs, target, gp, debug=False):
-    #print("inputs:\n", inputs)
-    #print("whole target:\n", target)
-    loss = 0
-    predict_title = []
-    encoder,decoder = gp.model["EncodeModel"], gp.model["AttnDecodeModel"]
-    encoder.optimizer.zero_grad()
-    decoder.optimizer.zero_grad()
-
-    #encode_output: <batch_size x vocab_size>
-    #encode_hidden: <1 x batch_size x hidden_dim>
-    encoder_output, encoder_hidden = encoder(inputs)
-    #encoder_output = selectOut(encoder_output)
-    #print("en_out: ", encoder_output)
-
-    seq_start = torch.fill_(torch.zeros(gp.BATCH_SIZE, 1), 
-                            gp.vocab["<SOS>"]).to(gp.device).int()
-    decoder_inputs = [seq_start, encoder_hidden, encoder_output]
-    for di in range(max(target[1])):
-        decoder_output, decoder_hidden = decoder(decoder_inputs)
-        topv, topi = decoder_output.topk(1)
-        predict_title.append(topi[0][0])
-        #print("de_out: ", decoder_output.shape,"\n", decoder_output.squeeze(1) )
-        #print("target: ", target[0][:,di].shape,"\n", target[0][:,di])
-        #print("predict: ", topi[0][:10], "\tprob: ", decoder_output[0,0,3])
-        loss_tensor = gp.criterion(decoder_output.squeeze(1), 
-                                   target[0][:, di]) 
-        #print("loss: ", loss_tensor.data.tolist()[:10])
-        #print("loss mean: ", loss_tensor.masked_select(greatorMask(di, target[1])))
-        loss += loss_tensor.masked_select(greatorMask(di, target[1])).mean()
-        #print("loss:\n", loss.masked_select(greatorMask(di, target[1])))
-        decoder_inputs[0] = target[0][:, di].view(gp.BATCH_SIZE, 1) # Teacher forcing
-        # 以下是 non-Teacher forcing part
-        #decoder_inputs = topi.squeeze().detach()  # detach from history as input
-        #loss += criterion(decoder_output, target[di])
-        #if decoder_inputs.item() == EOS_token:
-        #    break
-
+    gp.optimizer.zero_grad()
+    pred, loss = gp.model(inputs, target)
+    acc = rightPredictionCount(pred, target[0])
     print("loss: ", int(loss))
+    print("acc: ", int(acc))
     print("<<< ", digital2text(target[0][0]))
-    print(">>> ", digital2text(predict_title))
+    print(">>> ", digital2text(pred[0]))
     loss.backward()
-    encoder.optimizer.step()
-    decoder.optimizer.step()
-    output = predict_title
-    return output, rightPredictionCount(predict_title, target[0][0]), loss
+    gp.optimizer.step()
+    return pred, acc, loss
 
 def seq2seqTrain(dataloader, gp):
     total_acc, total_count = 0, 1
     lossList = []
-    gp.model["EncodeModel"].train()
-    gp.model["AttnDecodeModel"].train()
+    gp.model.train()
     for idx, item in enumerate(dataloader):
         if len(item[0]) != gp.BATCH_SIZE:
             break
         print("batch num: ", total_count)
         output, acc, loss = seq2seqTrainUnit(makeInputs(item), makeTarget(item), gp)
-        print(int(total_count), "\t", int(loss), file=sys.stderr)
+        #print(int(total_count), "\t", int(loss), file=sys.stderr)
         #if idx > 200:
         #    input()
         #print("acc:", acc)
@@ -269,9 +143,10 @@ def showEpoch(avg_accu, lossList, epoch_n, start_time):
     plt.cla()
     plt.plot(gp.epoch_loss_list)
     plt.savefig(gp.epoch_loss_list_fig_path)
+    #plt.savefig(gp.epoch_loss_list_fig_path+str(time.time_ns())+".png")
     print('#' * 50)
     print("# epoch: {:3d} | time: {:5.2f}s | avg_accu: {:8.3f} | nextLR: {:8.3f} ".\
-            format(epoch_n, time.time()-start_time, avg_accu, gp.defaultLR) )
+            format(epoch_n, time.time()-start_time, avg_accu, gp.LR) )
     plt.cla()
     plt.plot(lossList)
     plt.savefig(gp.fig_path+"lossList-"+str(time.time_ns())+".png")
@@ -288,24 +163,15 @@ def runEpoch(epoch_n):
     showEpoch(avg_accu, lossList, epoch_n, start_time)
     #updateHyperParas()
     gc.collect()
-    torch.save(gp.model["EncodeModel"], gp.encode_model_path)
-    torch.save(gp.model["AttnDecodeModel"], gp.decode_model_path)
-    if epoch_n%20 == 0:
-        torch.save(gp.model["EncodeModel"], 
-                   gp.encode_model_path +"."+ str(time.time_ns()) +".bak")
-        torch.save(gp.model["AttnDecodeModel"], 
-                   gp.decode_model_path +"."+ str(time.time_ns()) +".bak")
+    torch.save(gp.model, gp.model_path)
+    if epoch_n%10 == 0:
+        torch.save(gp.model, gp.model_path+"."+str(time.time_ns())+".bak")
 
-def run():
-    buildVocab(lambda: getDataIter(fields[0]))
-    loadModel(gp.encode_model_path, name="EncodeModel")
-    loadModel(gp.decode_model_path, name="AttnDecodeModel")
-
+### main ###
+buildVocab(lambda: getDataIter(fields[0]))
+loadModel()
+if __name__ == "__main__":
     for e in range(1, gp.EPOCHS+1):
         runEpoch(e)
-
-
-if __name__ == "__main__":
-    run()
 
 

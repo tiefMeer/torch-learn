@@ -12,15 +12,15 @@ class GlobalParameters():
     def __init__(self):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = {}
-        self.EPOCHS = 400
+        self.EPOCHS = 500
         self.BATCH_SIZE = 64
-        self.defaultLR = 0.008
+        self.LR = 0.005
         self.embed_dim = 128
         self.hidden_dim = 50
         self.target_size = 3
         self.text_select_width = 10
         self.max_length = 30
-        self.text_max_length = 500
+        self.text_max_length = 400
         self.dataSourceFilePath = "data/"
         self.vocab_path = "data/vocab.dat"
         self.fig_path = "data/fig/"
@@ -36,10 +36,9 @@ class GlobalParameters():
     def addVocab(self, vocab):
         self.vocab = vocab
         self.vocab_size = len(vocab)
-    #下面这些改放到model类里
-    #def modelSetting(self, model_para):
-    #    self.optimizer = torch.optim.SGD(model_para, lr=self.LR)
-    #    self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, 1.0, gamma=0.1)
+    def modelSetting(self, model_para):
+        self.optimizer = torch.optim.SGD(model_para, lr=self.LR)
+        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, 1.0, gamma=0.1)
 
 gp = GlobalParameters()
 
